@@ -1,5 +1,6 @@
 /.eslintcache
 /coverage/
-/dist/
+# Include /dist to install from git in pretext-tools
+#/dist/
 /node_modules/
 /test.xml
