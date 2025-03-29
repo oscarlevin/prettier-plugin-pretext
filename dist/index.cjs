@@ -10079,10 +10079,9 @@ function printChildrenWhenWhitespaceDoesNotMatter(path, print) {
     }
     if (children.element) {
       response.push(...childrenPath.map((elementPath) => {
-        var _a, _b;
         const node2 = elementPath.getValue();
         const location = node2.location;
-        const tagName = (_b = (_a = node2.children.Name[0]) == null ? void 0 : _a.image) == null ? void 0 : _b.trim();
+        const tagName = node2.children.Name[0]?.image?.trim();
         return {
           offset: location.startOffset,
           startLine: location.startLine,
