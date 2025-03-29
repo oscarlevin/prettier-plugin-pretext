@@ -8796,7 +8796,7 @@ var require_doc = __commonJS({
                     regex = /\r\n/g;
                     break;
                   default:
-                    throw new Error('Unexpected "eol" '.concat(JSON.stringify(eol), "."));
+                    throw new Error(`Unexpected "eol" ${JSON.stringify(eol)}.`);
                 }
                 const endOfLines = text.match(regex);
                 return endOfLines ? endOfLines.length : 0;
@@ -8834,7 +8834,7 @@ var require_doc = __commonJS({
           });
           function stripAnsi(string) {
             if (typeof string !== "string") {
-              throw new TypeError("Expected a `string`, got `".concat(typeof string, "`"));
+              throw new TypeError(`Expected a \`string\`, got \`${typeof string}\``);
             }
             return string.replace(ansiRegex(), "");
           }
@@ -9351,7 +9351,7 @@ var require_doc = __commonJS({
                       lastSpaces += part.n;
                       break;
                     default:
-                      throw new Error("Unexpected type '".concat(part.type, "'"));
+                      throw new Error(`Unexpected type '${part.type}'`);
                   }
                 }
                 flushSpaces();
@@ -9407,7 +9407,7 @@ var require_doc = __commonJS({
                 }
                 return trimCount;
               }
-              function fits(next, restCommands, width, options, hasLineSuffix, mustBeFlat) {
+              function fits(next, restCommands, width, hasLineSuffix, mustBeFlat) {
                 let restIdx = restCommands.length;
                 const cmds = [next];
                 const out = [];
@@ -9416,26 +9416,34 @@ var require_doc = __commonJS({
                     if (restIdx === 0) {
                       return true;
                     }
-                    cmds.push(restCommands[restIdx - 1]);
-                    restIdx--;
+                    cmds.push(restCommands[--restIdx]);
                     continue;
                   }
-                  const [ind, mode, doc] = cmds.pop();
+                  const {
+                    mode,
+                    doc
+                  } = cmds.pop();
                   if (typeof doc === "string") {
                     out.push(doc);
                     width -= getStringWidth(doc);
-                  } else if (isConcat(doc)) {
+                  } else if (isConcat(doc) || doc.type === "fill") {
                     const parts = getDocParts(doc);
                     for (let i = parts.length - 1; i >= 0; i--) {
-                      cmds.push([ind, mode, parts[i]]);
+                      cmds.push({
+                        mode,
+                        doc: parts[i]
+                      });
                     }
                   } else {
                     switch (doc.type) {
                       case "indent":
-                        cmds.push([makeIndent(ind, options), mode, doc.contents]);
-                        break;
                       case "align":
-                        cmds.push([makeAlign(ind, doc.n, options), mode, doc.contents]);
+                      case "indent-if-break":
+                      case "label":
+                        cmds.push({
+                          mode,
+                          doc: doc.contents
+                        });
                         break;
                       case "trim":
                         width += trim(out);
@@ -9445,47 +9453,31 @@ var require_doc = __commonJS({
                           return false;
                         }
                         const groupMode = doc.break ? MODE_BREAK : mode;
-                        cmds.push([ind, groupMode, doc.expandedStates && groupMode === MODE_BREAK ? getLast(doc.expandedStates) : doc.contents]);
-                        if (doc.id) {
-                          groupModeMap[doc.id] = groupMode;
-                        }
+                        const contents = doc.expandedStates && groupMode === MODE_BREAK ? getLast(doc.expandedStates) : doc.contents;
+                        cmds.push({
+                          mode: groupMode,
+                          doc: contents
+                        });
                         break;
                       }
-                      case "fill":
-                        for (let i = doc.parts.length - 1; i >= 0; i--) {
-                          cmds.push([ind, mode, doc.parts[i]]);
-                        }
-                        break;
-                      case "if-break":
-                      case "indent-if-break": {
-                        const groupMode = doc.groupId ? groupModeMap[doc.groupId] : mode;
-                        if (groupMode === MODE_BREAK) {
-                          const breakContents = doc.type === "if-break" ? doc.breakContents : doc.negate ? doc.contents : indent4(doc.contents);
-                          if (breakContents) {
-                            cmds.push([ind, mode, breakContents]);
-                          }
-                        }
-                        if (groupMode === MODE_FLAT) {
-                          const flatContents = doc.type === "if-break" ? doc.flatContents : doc.negate ? indent4(doc.contents) : doc.contents;
-                          if (flatContents) {
-                            cmds.push([ind, mode, flatContents]);
-                          }
+                      case "if-break": {
+                        const groupMode = doc.groupId ? groupModeMap[doc.groupId] || MODE_FLAT : mode;
+                        const contents = groupMode === MODE_BREAK ? doc.breakContents : doc.flatContents;
+                        if (contents) {
+                          cmds.push({
+                            mode,
+                            doc: contents
+                          });
                         }
                         break;
                       }
                       case "line":
-                        switch (mode) {
-                          case MODE_FLAT:
-                            if (!doc.hard) {
-                              if (!doc.soft) {
-                                out.push(" ");
-                                width -= 1;
-                              }
-                              break;
-                            }
-                            return true;
-                          case MODE_BREAK:
-                            return true;
+                        if (mode === MODE_BREAK || doc.hard) {
+                          return true;
+                        }
+                        if (!doc.soft) {
+                          out.push(" ");
+                          width--;
                         }
                         break;
                       case "line-suffix":
@@ -9495,9 +9487,6 @@ var require_doc = __commonJS({
                         if (hasLineSuffix) {
                           return false;
                         }
-                        break;
-                      case "label":
-                        cmds.push([ind, mode, doc.contents]);
                         break;
                     }
                   }
@@ -9509,12 +9498,20 @@ var require_doc = __commonJS({
                 const width = options.printWidth;
                 const newLine = convertEndOfLineToChars(options.endOfLine);
                 let pos = 0;
-                const cmds = [[rootIndent(), MODE_BREAK, doc]];
+                const cmds = [{
+                  ind: rootIndent(),
+                  mode: MODE_BREAK,
+                  doc
+                }];
                 const out = [];
                 let shouldRemeasure = false;
-                let lineSuffix = [];
+                const lineSuffix = [];
                 while (cmds.length > 0) {
-                  const [ind, mode, doc2] = cmds.pop();
+                  const {
+                    ind,
+                    mode,
+                    doc: doc2
+                  } = cmds.pop();
                   if (typeof doc2 === "string") {
                     const formatted = newLine !== "\n" ? doc2.replace(/\n/g, newLine) : doc2;
                     out.push(formatted);
@@ -9522,7 +9519,11 @@ var require_doc = __commonJS({
                   } else if (isConcat(doc2)) {
                     const parts = getDocParts(doc2);
                     for (let i = parts.length - 1; i >= 0; i--) {
-                      cmds.push([ind, mode, parts[i]]);
+                      cmds.push({
+                        ind,
+                        mode,
+                        doc: parts[i]
+                      });
                     }
                   } else {
                     switch (doc2.type) {
@@ -9530,10 +9531,18 @@ var require_doc = __commonJS({
                         out.push(cursor.placeholder);
                         break;
                       case "indent":
-                        cmds.push([makeIndent(ind, options), mode, doc2.contents]);
+                        cmds.push({
+                          ind: makeIndent(ind, options),
+                          mode,
+                          doc: doc2.contents
+                        });
                         break;
                       case "align":
-                        cmds.push([makeAlign(ind, doc2.n, options), mode, doc2.contents]);
+                        cmds.push({
+                          ind: makeAlign(ind, doc2.n, options),
+                          mode,
+                          doc: doc2.contents
+                        });
                         break;
                       case "trim":
                         pos -= trim(out);
@@ -9542,31 +9551,51 @@ var require_doc = __commonJS({
                         switch (mode) {
                           case MODE_FLAT:
                             if (!shouldRemeasure) {
-                              cmds.push([ind, doc2.break ? MODE_BREAK : MODE_FLAT, doc2.contents]);
+                              cmds.push({
+                                ind,
+                                mode: doc2.break ? MODE_BREAK : MODE_FLAT,
+                                doc: doc2.contents
+                              });
                               break;
                             }
                           case MODE_BREAK: {
                             shouldRemeasure = false;
-                            const next = [ind, MODE_FLAT, doc2.contents];
+                            const next = {
+                              ind,
+                              mode: MODE_FLAT,
+                              doc: doc2.contents
+                            };
                             const rem = width - pos;
                             const hasLineSuffix = lineSuffix.length > 0;
-                            if (!doc2.break && fits(next, cmds, rem, options, hasLineSuffix)) {
+                            if (!doc2.break && fits(next, cmds, rem, hasLineSuffix)) {
                               cmds.push(next);
                             } else {
                               if (doc2.expandedStates) {
                                 const mostExpanded = getLast(doc2.expandedStates);
                                 if (doc2.break) {
-                                  cmds.push([ind, MODE_BREAK, mostExpanded]);
+                                  cmds.push({
+                                    ind,
+                                    mode: MODE_BREAK,
+                                    doc: mostExpanded
+                                  });
                                   break;
                                 } else {
                                   for (let i = 1; i < doc2.expandedStates.length + 1; i++) {
                                     if (i >= doc2.expandedStates.length) {
-                                      cmds.push([ind, MODE_BREAK, mostExpanded]);
+                                      cmds.push({
+                                        ind,
+                                        mode: MODE_BREAK,
+                                        doc: mostExpanded
+                                      });
                                       break;
                                     } else {
                                       const state = doc2.expandedStates[i];
-                                      const cmd = [ind, MODE_FLAT, state];
-                                      if (fits(cmd, cmds, rem, options, hasLineSuffix)) {
+                                      const cmd = {
+                                        ind,
+                                        mode: MODE_FLAT,
+                                        doc: state
+                                      };
+                                      if (fits(cmd, cmds, rem, hasLineSuffix)) {
                                         cmds.push(cmd);
                                         break;
                                       }
@@ -9574,14 +9603,18 @@ var require_doc = __commonJS({
                                   }
                                 }
                               } else {
-                                cmds.push([ind, MODE_BREAK, doc2.contents]);
+                                cmds.push({
+                                  ind,
+                                  mode: MODE_BREAK,
+                                  doc: doc2.contents
+                                });
                               }
                             }
                             break;
                           }
                         }
                         if (doc2.id) {
-                          groupModeMap[doc2.id] = getLast(cmds)[1];
+                          groupModeMap[doc2.id] = getLast(cmds).mode;
                         }
                         break;
                       case "fill": {
@@ -9593,9 +9626,17 @@ var require_doc = __commonJS({
                           break;
                         }
                         const [content, whitespace] = parts;
-                        const contentFlatCmd = [ind, MODE_FLAT, content];
-                        const contentBreakCmd = [ind, MODE_BREAK, content];
-                        const contentFits = fits(contentFlatCmd, [], rem, options, lineSuffix.length > 0, true);
+                        const contentFlatCmd = {
+                          ind,
+                          mode: MODE_FLAT,
+                          doc: content
+                        };
+                        const contentBreakCmd = {
+                          ind,
+                          mode: MODE_BREAK,
+                          doc: content
+                        };
+                        const contentFits = fits(contentFlatCmd, [], rem, lineSuffix.length > 0, true);
                         if (parts.length === 1) {
                           if (contentFits) {
                             cmds.push(contentFlatCmd);
@@ -9604,8 +9645,16 @@ var require_doc = __commonJS({
                           }
                           break;
                         }
-                        const whitespaceFlatCmd = [ind, MODE_FLAT, whitespace];
-                        const whitespaceBreakCmd = [ind, MODE_BREAK, whitespace];
+                        const whitespaceFlatCmd = {
+                          ind,
+                          mode: MODE_FLAT,
+                          doc: whitespace
+                        };
+                        const whitespaceBreakCmd = {
+                          ind,
+                          mode: MODE_BREAK,
+                          doc: whitespace
+                        };
                         if (parts.length === 2) {
                           if (contentFits) {
                             cmds.push(whitespaceFlatCmd, contentFlatCmd);
@@ -9615,10 +9664,18 @@ var require_doc = __commonJS({
                           break;
                         }
                         parts.splice(0, 2);
-                        const remainingCmd = [ind, mode, fill3(parts)];
+                        const remainingCmd = {
+                          ind,
+                          mode,
+                          doc: fill3(parts)
+                        };
                         const secondContent = parts[0];
-                        const firstAndSecondContentFlatCmd = [ind, MODE_FLAT, [content, whitespace, secondContent]];
-                        const firstAndSecondContentFits = fits(firstAndSecondContentFlatCmd, [], rem, options, lineSuffix.length > 0, true);
+                        const firstAndSecondContentFlatCmd = {
+                          ind,
+                          mode: MODE_FLAT,
+                          doc: [content, whitespace, secondContent]
+                        };
+                        const firstAndSecondContentFits = fits(firstAndSecondContentFlatCmd, [], rem, lineSuffix.length > 0, true);
                         if (firstAndSecondContentFits) {
                           cmds.push(remainingCmd, whitespaceFlatCmd, contentFlatCmd);
                         } else if (contentFits) {
@@ -9634,26 +9691,42 @@ var require_doc = __commonJS({
                         if (groupMode === MODE_BREAK) {
                           const breakContents = doc2.type === "if-break" ? doc2.breakContents : doc2.negate ? doc2.contents : indent4(doc2.contents);
                           if (breakContents) {
-                            cmds.push([ind, mode, breakContents]);
+                            cmds.push({
+                              ind,
+                              mode,
+                              doc: breakContents
+                            });
                           }
                         }
                         if (groupMode === MODE_FLAT) {
                           const flatContents = doc2.type === "if-break" ? doc2.flatContents : doc2.negate ? indent4(doc2.contents) : doc2.contents;
                           if (flatContents) {
-                            cmds.push([ind, mode, flatContents]);
+                            cmds.push({
+                              ind,
+                              mode,
+                              doc: flatContents
+                            });
                           }
                         }
                         break;
                       }
                       case "line-suffix":
-                        lineSuffix.push([ind, mode, doc2.contents]);
+                        lineSuffix.push({
+                          ind,
+                          mode,
+                          doc: doc2.contents
+                        });
                         break;
                       case "line-suffix-boundary":
                         if (lineSuffix.length > 0) {
-                          cmds.push([ind, mode, {
-                            type: "line",
-                            hard: true
-                          }]);
+                          cmds.push({
+                            ind,
+                            mode,
+                            doc: {
+                              type: "line",
+                              hard: true
+                            }
+                          });
                         }
                         break;
                       case "line":
@@ -9670,8 +9743,12 @@ var require_doc = __commonJS({
                             }
                           case MODE_BREAK:
                             if (lineSuffix.length > 0) {
-                              cmds.push([ind, mode, doc2], ...lineSuffix.reverse());
-                              lineSuffix = [];
+                              cmds.push({
+                                ind,
+                                mode,
+                                doc: doc2
+                              }, ...lineSuffix.reverse());
+                              lineSuffix.length = 0;
                               break;
                             }
                             if (doc2.literal) {
@@ -9691,14 +9768,18 @@ var require_doc = __commonJS({
                         }
                         break;
                       case "label":
-                        cmds.push([ind, mode, doc2.contents]);
+                        cmds.push({
+                          ind,
+                          mode,
+                          doc: doc2.contents
+                        });
                         break;
                       default:
                     }
                   }
                   if (cmds.length === 0 && lineSuffix.length > 0) {
                     cmds.push(...lineSuffix.reverse());
-                    lineSuffix = [];
+                    lineSuffix.length = 0;
                   }
                 }
                 const cursorPlaceholderIndex = out.indexOf(cursor.placeholder);
@@ -9786,7 +9867,7 @@ var require_doc = __commonJS({
                   }
                   if (isConcat(doc2)) {
                     const printed = getDocParts(doc2).map(printDoc).filter(Boolean);
-                    return printed.length === 1 ? printed[0] : "[".concat(printed.join(", "), "]");
+                    return printed.length === 1 ? printed[0] : `[${printed.join(", ")}]`;
                   }
                   if (doc2.type === "line") {
                     const withBreakParent = Array.isArray(parentParts) && parentParts[index + 1] && parentParts[index + 1].type === "break-parent";
@@ -9815,7 +9896,7 @@ var require_doc = __commonJS({
                     return doc2.n === Number.NEGATIVE_INFINITY ? "dedentToRoot(" + printDoc(doc2.contents) + ")" : doc2.n < 0 ? "dedent(" + printDoc(doc2.contents) + ")" : doc2.n.type === "root" ? "markAsRoot(" + printDoc(doc2.contents) + ")" : "align(" + JSON.stringify(doc2.n) + ", " + printDoc(doc2.contents) + ")";
                   }
                   if (doc2.type === "if-break") {
-                    return "ifBreak(" + printDoc(doc2.breakContents) + (doc2.flatContents ? ", " + printDoc(doc2.flatContents) : "") + (doc2.groupId ? (!doc2.flatContents ? ', ""' : "") + ", { groupId: ".concat(printGroupId(doc2.groupId), " }") : "") + ")";
+                    return "ifBreak(" + printDoc(doc2.breakContents) + (doc2.flatContents ? ", " + printDoc(doc2.flatContents) : "") + (doc2.groupId ? (!doc2.flatContents ? ', ""' : "") + `, { groupId: ${printGroupId(doc2.groupId)} }` : "") + ")";
                   }
                   if (doc2.type === "indent-if-break") {
                     const optionsParts = [];
@@ -9823,10 +9904,10 @@ var require_doc = __commonJS({
                       optionsParts.push("negate: true");
                     }
                     if (doc2.groupId) {
-                      optionsParts.push("groupId: ".concat(printGroupId(doc2.groupId)));
+                      optionsParts.push(`groupId: ${printGroupId(doc2.groupId)}`);
                     }
-                    const options = optionsParts.length > 0 ? ", { ".concat(optionsParts.join(", "), " }") : "";
-                    return "indentIfBreak(".concat(printDoc(doc2.contents)).concat(options, ")");
+                    const options = optionsParts.length > 0 ? `, { ${optionsParts.join(", ")} }` : "";
+                    return `indentIfBreak(${printDoc(doc2.contents)}${options})`;
                   }
                   if (doc2.type === "group") {
                     const optionsParts = [];
@@ -9834,16 +9915,16 @@ var require_doc = __commonJS({
                       optionsParts.push("shouldBreak: true");
                     }
                     if (doc2.id) {
-                      optionsParts.push("id: ".concat(printGroupId(doc2.id)));
+                      optionsParts.push(`id: ${printGroupId(doc2.id)}`);
                     }
-                    const options = optionsParts.length > 0 ? ", { ".concat(optionsParts.join(", "), " }") : "";
+                    const options = optionsParts.length > 0 ? `, { ${optionsParts.join(", ")} }` : "";
                     if (doc2.expandedStates) {
-                      return "conditionalGroup([".concat(doc2.expandedStates.map((part) => printDoc(part)).join(","), "]").concat(options, ")");
+                      return `conditionalGroup([${doc2.expandedStates.map((part) => printDoc(part)).join(",")}]${options})`;
                     }
-                    return "group(".concat(printDoc(doc2.contents)).concat(options, ")");
+                    return `group(${printDoc(doc2.contents)}${options})`;
                   }
                   if (doc2.type === "fill") {
-                    return "fill([".concat(doc2.parts.map((part) => printDoc(part)).join(", "), "])");
+                    return `fill([${doc2.parts.map((part) => printDoc(part)).join(", ")}])`;
                   }
                   if (doc2.type === "line-suffix") {
                     return "lineSuffix(" + printDoc(doc2.contents) + ")";
@@ -9852,7 +9933,7 @@ var require_doc = __commonJS({
                     return "lineSuffixBoundary";
                   }
                   if (doc2.type === "label") {
-                    return "label(".concat(JSON.stringify(doc2.label), ", ").concat(printDoc(doc2.contents), ")");
+                    return `label(${JSON.stringify(doc2.label)}, ${printDoc(doc2.contents)})`;
                   }
                   throw new Error("Unknown doc type " + doc2.type);
                 }
@@ -9865,10 +9946,10 @@ var require_doc = __commonJS({
                   }
                   const prefix = String(id).slice(7, -1) || "symbol";
                   for (let counter = 0; ; counter++) {
-                    const key = prefix + (counter > 0 ? " #".concat(counter) : "");
+                    const key = prefix + (counter > 0 ? ` #${counter}` : "");
                     if (!usedKeysForSymbols.has(key)) {
                       usedKeysForSymbols.add(key);
-                      return printedSymbols[id] = "Symbol.for(".concat(JSON.stringify(key), ")");
+                      return printedSymbols[id] = `Symbol.for(${JSON.stringify(key)})`;
                     }
                   }
                 }
